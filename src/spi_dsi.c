@@ -6,6 +6,9 @@
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "rom/ets_sys.h"
+#include "soc/i2s_reg.h"
+#include "soc/io_mux_reg.h"
+#include "esp_private/periph_ctrl.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "crc16-ccitt.h"
@@ -26,6 +29,10 @@
 #define PARALLEL_LINES 32
 
 #define SOTEOTWAIT() asm volatile("nop;")
+
+
+#define N_PADDING 16
+#define NO_CRC 1
 
 
 spi_device_handle_t spi;
@@ -79,9 +86,29 @@ static void IRAM_ATTR lcd_spi_post_transfer_callback(spi_transaction_t *t)
     gpio_set_level(GPIO_CLKP_LS, 1);
 }
 
+void init_clk_output()
+{
+    periph_module_enable(PERIPH_I2S0_MODULE);
+    WRITE_PERI_REG(I2S_CLKM_CONF_REG(0),
+                    // I2S_CLKA_ENA | // Use APLL_CLK
+                    I2S_CLK_EN | // Use PLL_D2_CLK
+                    (0 << I2S_CLKM_DIV_A_S) |
+                    (0 << I2S_CLKM_DIV_B_S) |
+                    (1 << I2S_CLKM_DIV_NUM_S)); // Divide by 2
+
+    // Output I2C clock to CLK_OUT1
+    // Refer to "Register 4.33: IO_MUX_PIN_CTRL"" description in "ESP32 Technical Reference Manual"
+    WRITE_PERI_REG(PIN_CTRL, 0x000);
+
+    // Output CLK_OUT1 on GPIO0
+    PIN_FUNC_SELECT(GPIO_PIN_REG_0, FUNC_GPIO0_CLK_OUT1);
+}
+
 //Initialize the display
 void spi_init()
 {
+    init_clk_output();
+
     spi_bus_config_t buscfg = {
         .miso_io_num=-1,
         .mosi_io_num=GPIO_D0_HS,
@@ -96,7 +123,7 @@ void spi_init()
         .flags = SPI_DEVICE_NO_DUMMY | SPI_DEVICE_NO_RETURN_RESULT | SPI_DEVICE_BIT_LSBFIRST,
         .mode=0,                                // SPI mode 0
         .spics_io_num=-1,                       // CS pin
-        .dummy_bits=32,                         // Clock cycles with 0 data before the payload
+        .dummy_bits=0,                          // Clock cycles with 0 data before the payload
         .queue_size=7,                          // We want to be able to queue 7 transactions at a time
         .pre_cb=lcd_spi_pre_transfer_callback,  // Specify pre-transfer callback to handle D/C line
         .post_cb=lcd_spi_post_transfer_callback
@@ -137,6 +164,7 @@ void spi_init()
 
 //Reminder; MIPI is very LSB-first.
 typedef struct {
+    uint8_t pad[16];
     uint8_t sot; //should be 0xB8
     uint8_t datatype;
     uint16_t wordcount;
@@ -147,6 +175,7 @@ typedef struct {
 
 
 typedef struct {
+    uint8_t pad[16];
     uint8_t sot; //should be 0xB8
     uint8_t datatype;
     uint8_t data[];
@@ -185,12 +214,12 @@ static uint16_t mipiword(uint16_t val) {
     return ret;
 }
 
-#define N_PADDING 32
-
 // Warning: CRC isn't tested (my display does not use it)
 void mipiDsiSendLong(uint8_t type, uint8_t *data, int len) {
     unsigned n_bytes = sizeof(DsiLPHdr) + len + 3 + N_PADDING;
     DsiLPHdr *p = alloca(n_bytes);
+
+    memset(p->pad, 0, sizeof(p->pad));
 
     p->sot = 0xB8;
     p->datatype = type;
@@ -210,7 +239,8 @@ void mipiDsiSendLong(uint8_t type, uint8_t *data, int len) {
     p->data[len + 2] = (crc&0x8000) ? 0 : 0xff;  // need one last level transition at end
 #endif
 
-    memset(&p->data[len + 3], p->data[len + 2], N_PADDING);
+    // memset(&p->data[len + 3], p->data[len + 2], N_PADDING);
+    memset(&p->data[len + 3], 0, N_PADDING);
 
     send_stuff((uint8_t*)p, n_bytes);
 }
@@ -218,6 +248,8 @@ void mipiDsiSendLong(uint8_t type, uint8_t *data, int len) {
 void mipiDsiSendShort(uint8_t type, uint8_t *data, int len) {
     unsigned n_bytes = sizeof(DsiSPHdr) + len + 2 + N_PADDING;
     DsiSPHdr *p = alloca(n_bytes);
+
+    memset(p->pad, 0, sizeof(p->pad));
 
     p->sot = 0xB8;
     p->datatype = type;
@@ -227,7 +259,7 @@ void mipiDsiSendShort(uint8_t type, uint8_t *data, int len) {
     p->data[len] = calc_ecc((uint8_t*)&p->datatype);
     p->data[len + 1] = (p->data[len] & 0x80) ? 0 : 0xff;  // need one last level transition at end
 
-    memset(&p->data[len + 2], p->data[len + 1], N_PADDING);
+    memset(&p->data[len + 2], 0, N_PADDING);
 
     send_stuff((uint8_t*)p, n_bytes);
 }
