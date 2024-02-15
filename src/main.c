@@ -4,24 +4,35 @@
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "spi_dsi.h"
-#include "oled_dsi.h"
+#include "mipi_dsi.h"
+#include "oled.h"
 
+
+#define N_LINES 64
+
+void disp(unsigned col)
+{
+    uint8_t clrData[N_LINES + 1];
+    for (unsigned i = 0; i < sizeof(clrData) / 2; i++) {
+        clrData[2 * i] = col;
+        clrData[2 * i + 1] = col >> 8;
+    }
+    clrData[0] = 0x3C;
+    for (int i=0; i < (320 * 340 * 2) / N_LINES; i++) {
+        mipiDsiSendLong(0x39, clrData, N_LINES);
+    }
+}
 
 void app_main(void)
 {
     // Initialize the DSI interface
-    spi_init();
+    mipiInit();
+    initOled();
 
-    // uint8_t d[] = {0x12, 0x34, 0x56, 0x78};
-    // uint8_t e[] = {0xFF, 0x00, 0xFF, 0x11};
-    // uint8_t f[] = {0x01, 0x02, 0x03};
-
+    unsigned col = 0xF8F;
     while (1) {
-        // send_stuff(d, sizeof(d));
-        // send_stuff(e, sizeof(e));
-        // send_stuff(f, sizeof(f));
-        initOled();
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        disp(col);
+        col = ((col & 1) << 16) | (col >> 1);
+        vTaskDelay(5000 / portTICK_PERIOD_MS);
     }
 }
