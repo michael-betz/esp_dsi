@@ -7,20 +7,14 @@
 #include "mipi_dsi.h"
 #include "oled.h"
 
-
-#define N_LINES 64
-
-void disp(unsigned col)
+void disp(unsigned color)
 {
-    uint8_t clrData[N_LINES + 1];
-    for (unsigned i = 0; i < sizeof(clrData) / 2; i++) {
-        clrData[2 * i] = col;
-        clrData[2 * i + 1] = col >> 8;
+    uint8_t data[64 * 64 * 2];
+    for (unsigned i = 0; i < sizeof(data) / 2; i++) {
+        data[2 * i] = color;
+        data[2 * i + 1] = color >> 8;
     }
-    clrData[0] = 0x3C;
-    for (int i=0; i < (320 * 340 * 2) / N_LINES; i++) {
-        mipiDsiSendLong(0x39, clrData, N_LINES);
-    }
+    write_rect(0, 63, 0, 63, data);
 }
 
 void app_main(void)
@@ -29,10 +23,10 @@ void app_main(void)
     mipiInit();
     initOled();
 
-    unsigned col = 0xF8F;
+    unsigned color = 0xF8F;
     while (1) {
-        disp(col);
-        col = ((col & 1) << 16) | (col >> 1);
+        disp(color);
+        color = ((color & 1) << 16) | (color >> 1);
         vTaskDelay(5000 / portTICK_PERIOD_MS);
     }
 }

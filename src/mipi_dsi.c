@@ -62,7 +62,17 @@ static void spidma_intr(void *arg) {
 Brings up the clock and data lines to LP11, resyncs the flipflop, restarts the clock and DMA engine.
 */
 void mipiResync() {
-	//Get clock and data transceivers back in idle state
+	// Get clock and data transceivers back in idle state
+	// Init GPIO to MIPI idle levels
+	gpio_set_level(GPIO_D0N_LS, 1);
+	SOTEOTWAIT();
+	gpio_set_level(GPIO_D0P_LS, 1);
+	SOTEOTWAIT();
+
+	// Tristate HS data pins
+	gpio_set_direction(GPIO_D0N_HS, GPIO_MODE_INPUT);
+	gpio_set_direction(GPIO_D0P_HS, GPIO_MODE_INPUT);
+
 	gpio_set_level(GPIO_CLKN_LS, 1);
 	SOTEOTWAIT();
 	gpio_set_level(GPIO_CLKP_LS, 1);
@@ -105,9 +115,9 @@ void mipiResync() {
 }
 
 void mipiInit() {
-	spi_bus_config_t buscfg={
+	spi_bus_config_t buscfg = {
 		.miso_io_num=-1,
-		.mosi_io_num=GPIO_D0_HS,
+		.mosi_io_num=GPIO_D0P_HS,
 		.sclk_io_num=GPIO_FF_CLK,
 		.quadwp_io_num=-1,
 		.quadhd_io_num=-1,
@@ -115,12 +125,22 @@ void mipiInit() {
 	};
 
 	gpio_config_t io_conf={
-		.intr_type=GPIO_INTR_DISABLE,
-		.mode=GPIO_MODE_OUTPUT,
-		.pin_bit_mask=(1<<GPIO_D0N_LS)|(1LL<<GPIO_D0P_LS)|(1LL<<GPIO_D0_HS)|(1<<GPIO_CLKP_LS)|
-			(1<<GPIO_CLKN_LS)|(1<<GPIO_FF_NRST)|(1<<GPIO_FF_CLK)|(1<<GPIO_NRST),
+		.intr_type = GPIO_INTR_DISABLE,
+		.mode = GPIO_MODE_OUTPUT,
+		.pin_bit_mask = (1LL << GPIO_D0N_LS) | \
+						(1LL << GPIO_D0P_LS) | \
+						(1LL << GPIO_D0N_HS) | \
+						(1LL << GPIO_D0P_HS) | \
+						(1LL << GPIO_CLKP_LS) | \
+						(1LL << GPIO_CLKN_LS) | \
+						(1LL << GPIO_FF_NRST) | \
+						(1LL << GPIO_FF_CLK) | \
+						(1LL << GPIO_NRST)
 	};
 	gpio_config(&io_conf);
+
+	// Use GPIO matrix to output inverted MISO signal on GPIO_D0N_HS
+	esp_rom_gpio_connect_out_signal(GPIO_D0N_HS, HSPID_OUT_IDX, true, false);
 
 	assert(spicommon_periph_claim(HOST, "SPI2"));
 	ESP_ERROR_CHECK(spicommon_bus_initialize_io(HOST, &buscfg,  SPICOMMON_BUSFLAG_MASTER, NULL));
@@ -186,29 +206,29 @@ void mipiInit() {
 //Set up a list of dma descriptors. dmadesc is an array of descriptors. Data is the buffer to point to.
 static void IRAM_ATTR spicommon_setup_dma_desc_links(lldesc_t *dmadesc, int len, const uint8_t *data, bool isrx)
 {
-    int n = 0;
-    while (len) {
-        int dmachunklen = len;
-        if (dmachunklen > SPI_MAX_DMA_LEN) dmachunklen = SPI_MAX_DMA_LEN;
-        if (isrx) {
-            //Receive needs DMA length rounded to next 32-bit boundary
-            dmadesc[n].size = (dmachunklen + 3) & (~3);
-            dmadesc[n].length = (dmachunklen + 3) & (~3);
-        } else {
-            dmadesc[n].size = dmachunklen;
-            dmadesc[n].length = dmachunklen;
-        }
-        dmadesc[n].buf = (uint8_t *)data;
-        dmadesc[n].eof = 0;
-        dmadesc[n].sosf = 0;
-        dmadesc[n].owner = 1;
-        dmadesc[n].qe.stqe_next = &dmadesc[n + 1];
-        len -= dmachunklen;
-        data += dmachunklen;
-        n++;
-    }
-    dmadesc[n - 1].eof = 1; //Mark last DMA desc as end of stream.
-    dmadesc[n - 1].qe.stqe_next = NULL;
+	int n = 0;
+	while (len) {
+		int dmachunklen = len;
+		if (dmachunklen > SPI_MAX_DMA_LEN) dmachunklen = SPI_MAX_DMA_LEN;
+		if (isrx) {
+			//Receive needs DMA length rounded to next 32-bit boundary
+			dmadesc[n].size = (dmachunklen + 3) & (~3);
+			dmadesc[n].length = (dmachunklen + 3) & (~3);
+		} else {
+			dmadesc[n].size = dmachunklen;
+			dmadesc[n].length = dmachunklen;
+		}
+		dmadesc[n].buf = (uint8_t *)data;
+		dmadesc[n].eof = 0;
+		dmadesc[n].sosf = 0;
+		dmadesc[n].owner = 1;
+		dmadesc[n].qe.stqe_next = &dmadesc[n + 1];
+		len -= dmachunklen;
+		data += dmachunklen;
+		n++;
+	}
+	dmadesc[n - 1].eof = 1; //Mark last DMA desc as end of stream.
+	dmadesc[n - 1].qe.stqe_next = NULL;
 }
 
 static void mipiSendMultiple(uint8_t **data, int *lengths, int count) {
@@ -243,6 +263,11 @@ static void mipiSendMultiple(uint8_t **data, int *lengths, int count) {
 	gpio_set_level(GPIO_D0P_LS, 0);
 	SOTEOTWAIT();
 	gpio_set_level(GPIO_D0N_LS, 0);
+	SOTEOTWAIT();
+
+	// Drive HS data pins
+    gpio_set_direction(GPIO_D0N_HS, GPIO_MODE_OUTPUT);
+    gpio_set_direction(GPIO_D0P_HS, GPIO_MODE_OUTPUT);
 
 	//Break the loop on the current idle descriptor
 	idle_dmadesc[cur_idle_desc].qe.stqe_next=&data_dmadesc[0];
@@ -256,6 +281,12 @@ static void mipiSendMultiple(uint8_t **data, int *lengths, int count) {
 	gpio_set_level(GPIO_D0N_LS, 1);
 	SOTEOTWAIT();
 	gpio_set_level(GPIO_D0P_LS, 1);
+	SOTEOTWAIT();
+
+	// Tristate HS data pins
+	gpio_set_direction(GPIO_D0N_HS, GPIO_MODE_INPUT);
+	gpio_set_direction(GPIO_D0P_HS, GPIO_MODE_INPUT);
+
 }
 
 static void mipiSend(uint8_t *data, int len) {
@@ -319,11 +350,11 @@ static uint16_t mipiword(uint16_t val) {
 }
 
 //Warning: CRC isn't tested (my display does not use it)
-void mipiDsiSendLong(uint8_t type, uint8_t *data, int len) {
+void mipiDsiSendLong(uint8_t type, uint8_t addr, uint8_t *data, int len) {
 	DsiLPHdr p;
 	uint8_t footer[3];
-	uint8_t *datas[3] = {(uint8_t*)&p, data, footer};
-	int lengths[3] = {sizeof(DsiLPHdr), len, sizeof(footer)};
+	uint8_t *datas[4] = {(uint8_t*)&p, &addr, data, footer};
+	int lengths[4] = {sizeof(DsiLPHdr), 1, len, sizeof(footer)};
 
 	p.sot = 0xB8;
 	p.datatype = type;
