@@ -52,10 +52,13 @@ static DispPacket initPackets[] = {
 	{1, 0xC0, {0x20}},
 	{6, 0xC2, {0x17, 0x17, 0x17, 0x17, 0x17, 0x0B}},
 	{1, 0x3A, {0x55}},  // 16-bit mode
-	{0, 0x12, {0}},  // partial display mode
+	{0, 0x13, {0}},  // normal display mode
 	// {0, 0x22, {0}},  // All pixels off
 	// {0, 0x23, {0}},  // All pixels on
 	// {0, 0x28, {0}},  // display off
+	// {1, 0x66, {0x2}},  // enable high brightness mode (no effect)
+	// {1, 0x58, {0x6}},  // enable sunlight readable mode (no effect)
+	// {1, 0x55, {0x3}},  // enable auto current limit (no effect)
 	{0, 0x29, {0}},  // display on
 	{0, 0x11, {0}},  // exit_sleep_mode (need to wait 5 ms now)
 };
@@ -79,9 +82,13 @@ void initOled() {
 		if (p->len == 0)  // DCS short write without parameters
 			mipiDsiSendShort(0x05, &p->addr, 1);
 		else if (p->len == 1)  // DCS short write with 1 parameter
-			mipiDsiSendShort(0x15, &p->addr, 2);
+			mipiDsiSendShort(
+				0x15,  // p->addr == 0xC7 ? 0x39 : 0x15,  // maybe not needed
+				&p->addr,
+				2
+			);
 		else if (p->len < 8)  // DCS Long write
-			mipiDsiSendLong(0x32, &p->addr, p->len + 1);
+			mipiDsiSendLong(0x39, &p->addr, p->len + 1);
 		else
 			assert(0);
 		p++;
@@ -94,19 +101,20 @@ void initOled() {
 	// 	clrData[0] = 0x3C;
 	// }
 
-	// // display on
-    // uint8_t cmd = 0x29;
-    // mipiDsiSendShort(0x05, &cmd, 1);
-
 	printf("Display inited.\n");
 }
 
-static inline void setColRange(int xstart, int xend) {
+void setColRange(int xstart, int xend) {
 	uint8_t cmd[5];
 
-	//No idea why the *2... maybe per byte?
-	xstart = xstart * 2;
-	xend = xend * 2;
+	// From X163QLN01 app note:
+	// Memory Addres of Z2 column has to be offset (+160) if the start column (SC) or end
+	// column address (EC) is greater than 160.
+	if (xstart > 160)
+		xstart += 160;
+	if (xend > 160)
+		xend += 160;
+
 	cmd[0] = 0x2a; 				// set_col_addr
 	cmd[1] = (xstart >> 8); 	// scolh
 	cmd[2] = (xstart & 0xff); 	// scoll
@@ -115,7 +123,7 @@ static inline void setColRange(int xstart, int xend) {
 	mipiDsiSendLong(0x39, cmd, sizeof(cmd));
 }
 
-static inline void setRowRange(int ystart, int yend) {
+void setRowRange(int ystart, int yend) {
 	uint8_t cmd[5];
 	cmd[0] = 0x2b; 				// set_page_addr
 	cmd[1] = (ystart >> 8); 	// scolh
@@ -123,4 +131,10 @@ static inline void setRowRange(int ystart, int yend) {
 	cmd[3] = (yend >> 8); 		// ecolh
 	cmd[4] = (yend & 0xff); 	// ecoll
 	mipiDsiSendLong(0x39, cmd, sizeof(cmd));
+}
+
+void set_brightness(uint8_t val)
+{
+	uint8_t cmd[] = {0x51, val};  // normal: 0x51, high brightness mode: 0x63
+	mipiDsiSendShort(0x15, cmd, 2);
 }

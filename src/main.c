@@ -8,19 +8,35 @@
 #include "oled.h"
 
 
-#define N_LINES 64
+#define LINE_LEN 640
 
-void disp(unsigned col)
+void disp()
 {
-    uint8_t clrData[N_LINES + 1];
-    for (unsigned i = 0; i < sizeof(clrData) / 2; i++) {
-        clrData[2 * i] = col;
-        clrData[2 * i + 1] = col >> 8;
+    static unsigned iter = 0;
+    static uint8_t clrData[LINE_LEN * 2 + 1];
+
+    if (iter == 0)
+        clrData[0] = 0x2C;  // CMD: write from start
+    else
+        clrData[0] = 0x3C;  // CMD: continue write
+
+    uint8_t *p = &clrData[1];
+    for (unsigned i = 0; i < LINE_LEN; i++) {
+        // native color format is RGB 565
+        // here we drive it in RGB 555 to get white
+        unsigned r = (i + iter / 3) & 0x1F;
+        unsigned g = (i + iter / 3) & 0x1F;
+        unsigned b = (i + iter / 3) & 0x1F;
+        unsigned tmp = (b << 11) | (g << 6) | r;
+        *p++ = tmp;
+        *p++ = tmp >> 8;
     }
-    clrData[0] = 0x3C;
-    for (int i=0; i < (320 * 340 * 2) / N_LINES; i++) {
-        mipiDsiSendLong(0x39, clrData, N_LINES);
-    }
+
+    printf("row %d\n", iter);
+
+    mipiDsiSendLong(0x39, clrData, sizeof(clrData));
+
+    iter++;
 }
 
 void app_main(void)
@@ -28,11 +44,15 @@ void app_main(void)
     // Initialize the DSI interface
     mipiInit();
     initOled();
+    set_brightness(0xFF);
 
-    unsigned col = 0xF8F;
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    // setColRange(319 - 16 - 1, 319);
+    // setRowRange(0, 320);
+    // setColRange(0, 159);
     while (1) {
-        disp(col);
-        col = ((col & 1) << 16) | (col >> 1);
-        vTaskDelay(5000 / portTICK_PERIOD_MS);
+        disp();
+        vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 }

@@ -35,7 +35,7 @@ Thing to emulate single-lane MIPI using a flipflop and a bunch of resistors.
 #define IRQSRC ETS_SPI2_DMA_INTR_SOURCE
 #define DMACH 2
 
-#define L_IDLE 16
+#define L_IDLE 8
 #define N_IDLE 3
 #define N_DATA 8
 
